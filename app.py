@@ -1,85 +1,47 @@
-import os
-import pathlib
+from flask import Flask, url_for, redirect, session
+from authlib.integrations.flask_client import OAuth
 
-import requests
-from flask import Flask, session, abort, redirect, request
-from google.oauth2 import id_token
-from google_auth_oauthlib.flow import Flow
-from pip._vendor import cachecontrol
-import google.auth.transport.requests
+app = Flask(__name__)
+app.secret_key = 'random secret'
 
-app = Flask("Google Login App")
-app.secret_key = "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" # make sure this matches with that's in client_secret.json
-
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1" # to allow Http traffic for local dev
-
-GOOGLE_CLIENT_ID = "794254621795-7j8ctuhol9ubjnacsprcdpitlcuneeus.apps.googleusercontent.com"
-client_secrets_file = os.path.join(pathlib.Path(__file__).parent, "client_secret.json")
-
-flow = Flow.from_client_secrets_file(
-    client_secrets_file=client_secrets_file,
-    scopes=["https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email", "openid"],
-    redirect_uri="http://localhost/callback"
+#oauth config
+oauth = OAuth(app)
+google = oauth.register(
+    name='google',
+    client_id="848127194340-ikc89suc459huut717vr7vrbf15rj3c5.apps.googleusercontent.com",
+    client_secret="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",
+    access_token_url='https://accounts.google.com/o/oauth2/token',
+    access_token_params=None,
+    authorize_url='https://accounts.google.com/o/oauth2/auth',
+    authorize_params=None,
+    api_base_url='https://www.googleapis.com/oauth2/v1/',
+    client_kwargs={'scope': 'openid email profile'},
 )
 
+@app.route("/")
+def hello_world():
+    email = dict(session).get('email',None)
+    return f"Hello,{email}!"
 
-def login_is_required(function):
-    def wrapper(*args, **kwargs):
-        if "google_id" not in session:
-            return abort(401)  # Authorization required
-        else:
-            return function()
-
-    return wrapper
-
-
-@app.route("/login")
+@app.route('/login')
 def login():
-    authorization_url, state = flow.authorization_url()
-    session["state"] = state
-    return redirect(authorization_url)
+    google = oauth.create_client('google')
+    redirect_uri = url_for('authorize', _external=True)
+    return google.authorize_redirect(redirect_uri)
 
-
-@app.route("/callback")
-def callback():
-    flow.fetch_token(authorization_response=request.url)
-
-    if not session["state"] == request.args["state"]:
-        abort(500)  # State does not match!
-
-    credentials = flow.credentials
-    request_session = requests.session()
-    cached_session = cachecontrol.CacheControl(request_session)
-    token_request = google.auth.transport.requests.Request(session=cached_session)
-
-    id_info = id_token.verify_oauth2_token(
-        id_token=credentials._id_token,
-        request=token_request,
-        audience=GOOGLE_CLIENT_ID
-    )
-
-    session["google_id"] = id_info.get("sub")
-    session["name"] = id_info.get("name")
-    return redirect("/protected_area")
-
-
-@app.route("/logout")
-def logout():
-    session.clear()
+@app.route('/authorize')
+def authorize():
+    google = oauth.create_client('google')
+    token = google.authorize_access_token()
+    resp = google.get('user_info')
+    user_info = resp.json()
+    # do something with the token and profile
+    session['email'] = user_info['email']
     return redirect("/")
 
-
-@app.route("/")
-def index():
-    return "Hello World <a href='/login'><button>Login</button></a>"
-
-
-@app.route("/protected_area")
-@login_is_required
-def protected_area():
-    return f"Hello {session['name']}! <br/> <a href='/logout'><button>Logout</button></a>"
-
-
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=80, debug=True)
+@app.route('/logout')
+def logout():
+    for key in list(session.keys()):
+        session.pop(key)
+    return redirect('/')
 
